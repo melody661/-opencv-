@@ -4,6 +4,9 @@
 //2.将红蓝一起判断变为要么判断红要么判断蓝，这样的精度应该会提升？√不过我发现精度反而下降了？
 //3.写一个留帧的设计，用于识别不出时候可以视觉上进行掩饰 √
 //4.保留最大的两个矩形的做法似乎有很多毛病？（终止）
+
+//4.0优化：对于矩形肥大的优化。
+//我决定在识别的基础上缩小矩形 
 #include <opencv2/opencv.hpp>
 #include <bits/stdc++.h>
 using namespace cv;
@@ -29,9 +32,8 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     cvtColor(img, hsv, COLOR_BGR2HSV);      // 转换图片类型，hsv 是最常用的抠图格式,因为可以把亮度饱和度和色彩分开     
 
     // S >= 110 只留鲜艳的颜色；光晕/过曝白芯接近白色(S 很低)，在这里被滤掉, 这是为了扣出明显的红、蓝光
-    inRange(hsv, Scalar(0,130,150), Scalar(50,255,255), mask);//红色    左下限右上限
-  // inRange(hsv,Scalar(100,130,80),Scalar(255,255,255),mask);//蓝色 
-
+   // inRange(hsv, Scalar(0,130,150), Scalar(50,255,255), mask);//红色    左下限右上限
+   inRange(hsv,Scalar(100,130,80),Scalar(255,255,255),mask);//蓝色 
 
     //一般情况下：REDD(0,130,150 )   REDU(15,255,255)  BLUED(100,130,80)  BLUEU(255,255,255)
     //过亮：R(0,160,110)-(15,255,255)                B(100,160,110)-(125,255,255)
@@ -54,28 +56,17 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     out = img.clone();                      // 克隆原图，用于画
     for (size_t i = 0; i < contours.size(); ++i) {
         Rect box = boundingRect(contours[i]);//拿出每个矩形
-        if (box.area() < 400) continue;                 // 小噪点不处理
+    if (box.area() < 400) continue;                 // 小噪点不处理
      if (box.width < 6 or box.height < 6) continue;                   // 太细的条纹（桌面反光）不处理
-      // if (box.height < 1.1 * box.width) continue;     // 灯条是竖长条(倒置识别不出的原因？)
-
-        // 坐标
+      // if (box.height < 1.1 * box.width) continue;     // 灯条是竖长条(倒置识别不出的原因？
         A[i].x = box.x;
         A[i].y = box.y;
         A[i].hight = box.height;
         A[i].width = box.width;
-
-    //    Mat overlay = out.clone();                      
-      //  drawContours(overlay, contours, (int)i, Scalar(0,255,0), FILLED);// 用轮廓填充掩码图像
-      //  addWeighted(overlay, 0.95, out, 0.05, 0, out);  // 90% 覆盖，10% 原图
-     //   rectangle(out, box, Scalar(0, 255, 0), 4);     // 画灯条覆盖的框或者颜色    -1填充
-     //我选择把画图放到下面
     }
-
-    //  画准心
     double x1 = 0, y1 = 0;
     int k = 0;
     double maxx = 0;
-
     //取俩最大矩形法
  /* double secmaxx=0;
     int FIS=0,SEC=0;
@@ -96,16 +87,25 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     {
         circle(out, Point(x1, y1), 10, Scalar(0, 255, 0), -1);//防止准心乱闪
     } */
-   for(int  i=0;i<(int)contours.size();i++) maxx=max(maxx,contourArea(contours[i]));
+   int maxp;
+   for(int  i=0;i<(int)contours.size();i++)
+   {
+    if(contourArea(contours[i])>maxx)
+         maxx=max(maxx,contourArea(contours[i])),maxp=i;
+   }
    for (int i = 0; i < (int)contours.size(); i++) 
    {
        if (contourArea(contours[i]) * 6 < maxx) continue;   // 小噪点不处理 重要去除噪点的参数
+       Rect box=boundingRect(contours[i]);
+       Rect conp=boundingRect(contours[maxp]);
+       if((abs(box.x-conp.x)>100 or abs(box.y-conp.y)>150)&& maxx<1000)continue;//4.0新增判定喵
        if(A[i].hight*10<A[i].width || A[i].hight>A[i].width*10)continue;//你敢信我只是想把进度条优化了？？
         if (A[i].width >5) {
            x1 += A[i].x + A[i].width / 2;
             y1 += A[i].y + A[i].hight / 2;
            ++k;
         }
+        
     rectangle(out, boundingRect(contours[i]), Scalar(0, 255, 0), 4);//在这画，优化视觉体验喵
    }
 
@@ -114,7 +114,7 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     if(k>=2)
     {
         circle(out, Point(x1, y1), 10, Scalar(0, 255, 0), -1);//防止准心乱闪
-        waitKey(5);//留帧设计
+        waitKey(2);//留帧设计
     } 
 
 
@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
     }
 
     //传参
-    cap.set(CAP_PROP_AUTO_EXPOSURE,0);//关闭自动曝光 0关1开
+    cap.set(CAP_PROP_AUTO_EXPOSURE,0);//关闭自动曝光 0关1开  
     cap.set(CAP_PROP_FRAME_WIDTH, FRAME_WIDTH);//宽、长参数
     cap.set(CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT);//
     cap.set(CAP_PROP_FPS, FRAME_FPS);//fps设定
