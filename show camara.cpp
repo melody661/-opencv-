@@ -17,8 +17,8 @@ static const int CAMERA_INDEX = 0;      // 摄像头编号
 static const int FRAME_WIDTH = 640;     // 相机分辨率（龙邱一般是 640x480）
 static const int FRAME_HEIGHT = 480;    
 static const int FRAME_FPS = 60;        //  理想帧 龙湫60或30
-static const int BRIGHT=200;            //亮度  0-500 环境强光则参数调低，反之调高
-static const int BAO=-6;                //曝光    
+static const int BRIGHT=100;            //亮度  0-500 环境强光则参数调低，反之调高
+static const int BAO=-10;                //曝光    
 // ===================================================================
 Mat frame, out, mask;
 struct zuobiao {
@@ -29,12 +29,13 @@ struct zuobiao {
 } A[1000];
 static void Miao(const Mat& img, Mat& out, Mat& mask) {
     Mat hsv;//用hsv分参
-    cvtColor(img, hsv, COLOR_BGR2HSV);      // 转换图片类型，hsv 是最常用的抠图格式,因为可以把亮度饱和度和色彩分开     
-
-    // S >= 110 只留鲜艳的颜色；光晕/过曝白芯接近白色(S 很低)，在这里被滤掉, 这是为了扣出明显的红、蓝光
-   // inRange(hsv, Scalar(0,130,150), Scalar(50,255,255), mask);//红色    左下限右上限
-   inRange(hsv,Scalar(100,130,80),Scalar(255,255,255),mask);//蓝色 
-
+    cvtColor(img, hsv, COLOR_BGR2HSV);      // 转换图片类型，hsv 是最常用的抠图格式,因为可以把亮度饱和度和色彩分开   
+    //H 90-130是蓝色，调大往青蓝绿走，调小往紫红走    红色0-10橘红，170-179品红深红
+    //s 饱和度可以拿来区分纯色彩 和参杂白光的伪色彩
+    //v 亮度，v的下限决定能否过滤暗处
+  // inRange(hsv, Scalar(170,70,90), Scalar(179,255,255), mask);
+ //  inRange(hsv, Scalar(0,70,90), Scalar(10,255,255), mask);//红色    左下限右上限
+   inRange(hsv,Scalar(90,50,90),Scalar(130,255,255),mask);//蓝色 
     //一般情况下：REDD(0,130,150 )   REDU(15,255,255)  BLUED(100,130,80)  BLUEU(255,255,255)
     //过亮：R(0,160,110)-(15,255,255)                B(100,160,110)-(125,255,255)
     //暗R(0,110,55)-(15,255,255)                    B(100,110,55)-(125,255,255)
@@ -45,20 +46,16 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     // 这部分要把灯条中因为光晕而被滤掉的部分补回
     // 用一次小核闭运算把它补上，灯条就变回实心长条,闭合;先扩张连一块再消除边缘.
     morphologyEx(mask, mask, MORPH_CLOSE,
-                 getStructuringElement(MORPH_RECT, Size(10,10)));
+                 getStructuringElement(MORPH_RECT, Size(25,25)));
     // 再加一次开运算，腐蚀掉孤立的小噪点
     morphologyEx(mask, mask, MORPH_OPEN,
                  getStructuringElement(MORPH_ELLIPSE, Size(7, 7)));//size是处理的强度
-
     // 存矩形
     vector<vector<Point>> contours;//御用矩形存储形式
-    findContours(mask, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);//contours是各部分轮廓的存储数组
+    findContours(mask, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);//contours是各部分轮廓的存储数组，这个函数是把存储的点阵画到mask上
     out = img.clone();                      // 克隆原图，用于画
     for (size_t i = 0; i < contours.size(); ++i) {
         Rect box = boundingRect(contours[i]);//拿出每个矩形
-    if (box.area() < 400) continue;                 // 小噪点不处理
-     if (box.width < 6 or box.height < 6) continue;                   // 太细的条纹（桌面反光）不处理
-      // if (box.height < 1.1 * box.width) continue;     // 灯条是竖长条(倒置识别不出的原因？
         A[i].x = box.x;
         A[i].y = box.y;
         A[i].hight = box.height;
@@ -95,17 +92,14 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
    }
    for (int i = 0; i < (int)contours.size(); i++) 
    {
-       if (contourArea(contours[i]) * 6 < maxx) continue;   // 小噪点不处理 重要去除噪点的参数
+       if (contourArea(contours[i]) * 100 < maxx) continue;   // 小噪点不处理 重要去除噪点的参数
        Rect box=boundingRect(contours[i]);
        Rect conp=boundingRect(contours[maxp]);
-       if((abs(box.x-conp.x)>100 or abs(box.y-conp.y)>150)&& maxx<1000)continue;//4.0新增判定喵
-       if(A[i].hight*10<A[i].width || A[i].hight>A[i].width*10)continue;//你敢信我只是想把进度条优化了？？
-        if (A[i].width >5) {
+       if((abs(box.x-conp.x)>200 or abs(box.y-conp.y)>200)&& maxx<500)continue;//4.0新增判定喵
+   //    if(A[i].hight*20<A[i].width || A[i].hight>A[i].width*20)continue;//你敢信我只是想把进度条优化
            x1 += A[i].x + A[i].width / 2;
             y1 += A[i].y + A[i].hight / 2;
            ++k;
-        }
-        
     rectangle(out, boundingRect(contours[i]), Scalar(0, 255, 0), 4);//在这画，优化视觉体验喵
    }
 
@@ -114,7 +108,7 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     if(k>=2)
     {
         circle(out, Point(x1, y1), 10, Scalar(0, 255, 0), -1);//防止准心乱闪
-        waitKey(2);//留帧设计
+        waitKey(1);//留帧设计
     } 
 
 
@@ -151,7 +145,7 @@ int main(int argc, char** argv) {
         imshow("fact", out);
         imshow("test", mask);
         if (waitKey(1) == 27) break;
-        // 懒得搞按键了。esc退出得了 
+        // esc退出 
     }
     cap.release();// 释放摄像头好习惯
     destroyAllWindows();// 关闭窗口好习惯
