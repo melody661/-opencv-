@@ -4,10 +4,12 @@
 //2.将红蓝一起判断变为要么判断红要么判断蓝，这样的精度应该会提升？√不过我发现精度反而下降了？
 //3.写一个留帧的设计，用于识别不出时候可以视觉上进行掩饰 √
 //4.保留最大的两个矩形的做法似乎有很多毛病？（终止）
-
 //4.0优化：对于矩形肥大的优化。
 //我决定在识别的基础上缩小矩形 
 //5.0:采取曝光最低、用hsv调制参数分离白光和假色以及暗影子的方式，效果非常好。
+//5.1优化：决定加入滑动条来提高调试参数的效率      
+//5.2优化：决定使用旋转矩形来更精准采集四点坐标。
+//6.0: 根据老登提示：决定用平行特性加循环筛选来选择矩形，达到可以识别多个合法装甲板的目的，并希望可以进行分类，以便于后续的预判设计           
 #include <opencv2/opencv.hpp>
 #include <bits/stdc++.h>
 using namespace cv;
@@ -21,7 +23,36 @@ static const int FRAME_FPS = 60;        //  理想帧 龙湫60或30
 static const int BRIGHT=100;            //亮度  0-500 环境强光则参数调低，反之调高
 static const int BAO=-10;                //曝光    
 // ===================================================================
+Mat hdt;
 Mat frame, out, mask;
+int Hmin=90,Smin=50,Vmin=90,Hmax=130,Smax=255,Vmax=255;  
+// 蓝色参数：（90，50，90）--（130，255，255）
+// inRange(hsv, Scalar(170,70,90), Scalar(179,255,255), mask);
+//  inRange(hsv, Scalar(0,70,90), Scalar(10,255,255), mask);//红色（俩个一起开）    左下限右上限
+static void onHSVTrackbar(int, void*)
+{
+    char title[160];
+    snprintf(title, sizeof(title), "HSV  H:%d-%d  S:%d-%d  V:%d-%d",
+             Hmin, Hmax, Smin, Smax, Vmin, Vmax);
+    setWindowTitle("huadongtiao", title);//只改标题，不动画面
+}
+
+static void createHSVTrackbars()
+{
+    namedWindow("huadongtiao", WINDOW_NORMAL);
+    resizeWindow("huadongtiao", 420, 260);
+
+    // H 色相：OpenCV 里 H 最大是 179
+    createTrackbar("Hmin", "huadongtiao", &Hmin, 179, onHSVTrackbar);
+    createTrackbar("Hmax", "huadongtiao", &Hmax, 179, onHSVTrackbar);
+    // S 饱和度 / V 亮度：0-255
+    createTrackbar("Smin", "huadongtiao", &Smin, 255, onHSVTrackbar);
+    createTrackbar("Smax", "huadongtiao", &Smax, 255, onHSVTrackbar);
+    createTrackbar("Vmin", "huadongtiao", &Vmin, 255, onHSVTrackbar);
+    createTrackbar("Vmax", "huadongtiao", &Vmax, 255, onHSVTrackbar);
+}
+// =====================================================================
+
 struct zuobiao {
     double x;       // 左上角坐标
     double y;       // 左上角坐标
@@ -35,17 +66,12 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     //s 饱和度可以拿来区分纯色彩 和参杂白光的伪色彩
     //v 亮度，v的下限决定能否过滤暗处
 
-  // inRange(hsv, Scalar(170,70,90), Scalar(179,255,255), mask);
- //  inRange(hsv, Scalar(0,70,90), Scalar(10,255,255), mask);//红色（俩个一起开）    左下限右上限
 
-   inRange(hsv,Scalar(90,50,90),Scalar(130,255,255),mask);//蓝色 
+   inRange(hsv,Scalar(Hmin,Smin,Vmin),Scalar(Hmax,Smax,Vmax),mask);//蓝色 
 
-   //目前似乎不需要下面的参数了？
-    //一般情况下：REDD(0,130,150 )   REDU(15,255,255)  BLUED(100,130,80)  BLUEU(255,255,255)
-    //过亮：R(0,160,110)-(15,255,255)                B(100,160,110)-(125,255,255)
-    //暗R(0,110,55)-(15,255,255)                    B(100,110,55)-(125,255,255)
-
-
+    //开红色俩个都要开因为红色是0-10加上170-179
+  // inRange(hsv,Scalar(Hmin,Smin,Vmin),Scalar(Hmax,Smax,Vmax),mask);
+   //inRange(hsv,Scalar(0,Smin,Vmin),Scalar(10,Smax,Vmax),mask);
 
 
     // 这部分要把灯条中因为光晕而被滤掉的部分补回
@@ -60,36 +86,19 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
     findContours(mask, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);//contours是各部分轮廓的存储数组，这个函数是把存储的点阵画到mask上
     out = img.clone();                      // 克隆原图，用于画
     for (size_t i = 0; i < contours.size(); ++i) {
-        Rect box = boundingRect(contours[i]);//拿出每个矩形
+        //minarearect:旋转矩形！！
+        RotatedRect box=minAreaRect(contours[i]);
+     /*   Rect box = boundingRect(contours[i]);//拿出每个矩形
         A[i].x = box.x;
         A[i].y = box.y;
         A[i].hight = box.height;
         A[i].width = box.width;
+        */
     }
     double x1 = 0, y1 = 0;
     int k = 0;
     double maxx = 0;
-    //取俩最大矩形法
- /* double secmaxx=0;
-    int FIS=0,SEC=0;
-    for (int i = 0; i < (int)contours.size(); i++){
-        if (contourArea(contours[i]) > maxx)
-        {
-            secmaxx=maxx,SEC=FIS;
-            maxx=contourArea(contours[i]),FIS=i;
-        }
-        else if(contourArea(contours[i]) > secmaxx)
-        {
-            secmaxx=contourArea(contours[i]) ,SEC=i;
-        }
-    }   
-    x1=(A[FIS].x+A[FIS].width/2+A[SEC].x+A[SEC].width/2)/2;
-    y1=(A[FIS].y+A[FIS].hight/2+A[SEC].y+A[SEC].hight/2)/2;
-    if(!FIS and !SEC)
-    {
-        circle(out, Point(x1, y1), 10, Scalar(0, 255, 0), -1);//防止准心乱闪
-    } */
-   int maxp;
+   int maxp=0;
    for(int  i=0;i<(int)contours.size();i++)
    {
     if(contourArea(contours[i])>maxx)
@@ -97,15 +106,22 @@ static void Miao(const Mat& img, Mat& out, Mat& mask) {
    }
    for (int i = 0; i < (int)contours.size(); i++) 
    {
-       if (contourArea(contours[i]) * 100 < maxx) continue;   // 小噪点不处理 重要去除噪点的参数
+    if (contourArea(contours[i]) * 100 < maxx) continue;
+    RotatedRect box=minAreaRect(contours[i]);
+    x1+=box.center.x;
+    y1+=box.center.y;
+    k++;
+    /*  if (contourArea(contours[i]) * 100 < maxx) continue;   // 小噪点不处理 重要去除噪点的参数
        Rect box=boundingRect(contours[i]);
        Rect conp=boundingRect(contours[maxp]);
        if((abs(box.x-conp.x)>200 or abs(box.y-conp.y)>200)&& maxx<500)continue;//4.0新增判定喵
    //    if(A[i].hight*20<A[i].width || A[i].hight>A[i].width*20)continue;//你敢信我只是想把进度条优化
            x1 += A[i].x + A[i].width / 2;
             y1 += A[i].y + A[i].hight / 2;
-           ++k;
-    rectangle(out, boundingRect(contours[i]), Scalar(0, 255, 0), 4);//在这画，优化视觉体验喵
+           ++k;  */
+    drawContours(out, contours,i, Scalar(0, 255, 0), 4);//在这画，优化视觉体验喵
+    // 第二个是表示绘画的对象是哪个组，第三个是画 这个组里的第几个？-1是全画。
+    //rectangle不和旋转矩形匹配！
    }
 
     x1 /=k;
@@ -129,8 +145,11 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    //传参
-    cap.set(CAP_PROP_AUTO_EXPOSURE,0);//关闭自动曝光 0关1开  
+
+    createHSVTrackbars();//创建滑动条 
+
+
+   cap.set(CAP_PROP_AUTO_EXPOSURE,0);//关闭自动曝光 0关1开  
     cap.set(CAP_PROP_FRAME_WIDTH, FRAME_WIDTH);//宽、长参数
     cap.set(CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT);//
     cap.set(CAP_PROP_FPS, FRAME_FPS);//fps设定
@@ -138,7 +157,6 @@ int main(int argc, char** argv) {
     cap.set(CAP_PROP_BRIGHTNESS,BRIGHT);//亮度
     cap.set(CAP_PROP_EXPOSURE,BAO);//曝光
     //摄像头参数我扔开头宏定义了
-
     while(true) {
         if (!cap.read(frame) || frame.empty()) {// 读摄像头失败
             cout<<"manba out"<<endl;
